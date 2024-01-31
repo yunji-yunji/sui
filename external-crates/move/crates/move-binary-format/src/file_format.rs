@@ -48,6 +48,12 @@ use serde::{Deserialize, Serialize};
 use std::ops::BitOr;
 use variant_count::VariantCount;
 
+use rand::{
+    Rng, random,
+    prelude::Distribution,
+    distributions::Standard,
+};
+
 /// Generic index into one of the tables in the binary format.
 pub type TableIndex = u16;
 
@@ -90,6 +96,13 @@ macro_rules! define_index {
             #[inline]
             fn into_index(self) -> usize {
                 self.0 as usize
+            }
+        }
+
+        impl Distribution<$name> for Standard {
+            fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> $name {
+                let rnd: TableIndex = rng.gen();
+                $name(rnd)
             }
         }
     };
@@ -420,8 +433,18 @@ pub struct FieldDefinition {
     pub signature: TypeSignature,
 }
 
+impl Distribution<FieldDefinition> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> FieldDefinition {
+        FieldDefinition {
+            name: rand::random(),
+            signature: TypeSignature(rand::random()),
+        }
+    }
+}
+
 /// `Visibility` restricts the accessibility of the associated entity.
 /// - For function visibility, it restricts who may call into the associated function.
+#[derive(VariantCount)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "fuzzing"), derive(proptest_derive::Arbitrary))]
 #[cfg_attr(any(test, feature = "fuzzing"), proptest(no_params))]
@@ -454,6 +477,18 @@ impl std::convert::TryFrom<u8> for Visibility {
             x if x == Visibility::Public as u8 => Ok(Visibility::Public),
             x if x == Visibility::Friend as u8 => Ok(Visibility::Friend),
             _ => Err(()),
+        }
+    }
+}
+
+impl Distribution<Visibility> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Visibility {
+        const ENUM_SIZE: usize = Visibility::VARIANT_COUNT;
+        match rng.gen_range(0..ENUM_SIZE) {
+            0 => Visibility::Private,
+            1 => Visibility::Public,
+            2 => Visibility::Friend,
+            _ => unreachable!(),
         }
     }
 }
@@ -574,6 +609,20 @@ impl Signature {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+}
+
+impl Distribution<Signature> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Signature {
+        let params: i32 = 5; // TODO: who provide this "params"
+        let length: i32 = rng.gen_range(0..=params);
+        // println!("signature length = {:?}",length); // leng==4 => UNKNOWN_INVARIANT_VIOLATION_ERROR // 0 => no error
+        let mut sig = Signature(vec!());
+        for _ in 0..length {
+            let rand_token = rand::random();
+            sig.0.push(rand_token);
+        }
+        sig
     }
 }
 
@@ -788,6 +837,20 @@ impl BitOr<AbilitySet> for AbilitySet {
     }
 }
 
+impl Distribution<AbilitySet> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> AbilitySet {
+        match rng.gen_range(0..=5) {
+            0 => AbilitySet::EMPTY,
+            1 => AbilitySet::PRIMITIVES,
+            2 => AbilitySet::REFERENCES,
+            3 => AbilitySet::SIGNER,
+            4 => AbilitySet::VECTOR,
+            5 => AbilitySet::ALL,
+            _ => AbilitySet::EMPTY,
+        }
+    }
+}
+
 pub struct AbilitySetIterator {
     set: AbilitySet,
     idx: u8,
@@ -848,6 +911,7 @@ impl Arbitrary for AbilitySet {
 ///
 /// A SignatureToken can express more types than the VM can handle safely, and correctness is
 /// enforced by the verifier.
+#[derive(VariantCount)]
 #[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "wasm", derive(Serialize, Deserialize))]
@@ -881,6 +945,50 @@ pub enum SignatureToken {
     U32,
     /// Unsigned integers, 256 bits length.
     U256,
+}
+
+impl Distribution<SignatureToken> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> SignatureToken {
+        const ENUM_SIZE: usize = SignatureToken::VARIANT_COUNT;
+        match rng.gen_range(0..ENUM_SIZE) {
+        // match rng.gen_range(0..=14) {
+            0 => SignatureToken::Bool,
+            1 => SignatureToken::U8,
+            2 => SignatureToken::U64,
+            3 => SignatureToken::U128,
+            4 => SignatureToken::Address,
+            5 => SignatureToken::Signer,
+            6 => {
+                let sig_token: SignatureToken = rand::random();
+                SignatureToken::Vector(Box::new(sig_token))
+            },
+            7 => {
+                let idx: StructHandleIndex = rand::random();
+                SignatureToken::Struct(idx)
+            },
+            8 => {
+                let idx: StructHandleIndex = rand::random();
+                let sig_token: SignatureToken = rand::random();
+                SignatureToken::StructInstantiation(idx, vec!(sig_token))
+            },
+            9 => {
+                let sig_token: SignatureToken = rand::random();
+                SignatureToken::Reference(Box::new(sig_token))
+            },
+            10 => {
+                let sig_token: SignatureToken = rand::random();
+                SignatureToken::MutableReference(Box::new(sig_token))
+            },
+            11 => {
+                let idx: TypeParameterIndex = rand::random();
+                SignatureToken::TypeParameter(idx)
+            },
+            12 => SignatureToken::U16,
+            13 => SignatureToken::U32,
+            14 => SignatureToken::U256,
+            _ => unreachable!(),
+        }
+    }
 }
 
 /// An iterator to help traverse the `SignatureToken` in a non-recursive fashion to avoid
@@ -1133,6 +1241,37 @@ impl SignatureToken {
 pub struct Constant {
     pub type_: SignatureToken,
     pub data: Vec<u8>,
+}
+
+impl Distribution<Constant> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Constant {
+        let ty: SignatureToken = rand::random();
+        let mut len = 38; // TODO
+        match ty.clone() {
+            SignatureToken::Bool => { len = 1; }, //Boolean 1 byte.
+            SignatureToken::U8 => { len = 1; },
+            SignatureToken::U16 => { len = 2; },
+            SignatureToken::U32 => { len = 4; },
+            SignatureToken::U64 => { len = 8; },
+            SignatureToken::U128 => { len = 16; },
+            SignatureToken::U256 => { len = 32; },
+            SignatureToken::Address => { len = 16; },
+            SignatureToken::Signer => { len = 16; },
+            SignatureToken::Vector(boxed) => { len = 32; },
+            SignatureToken::Struct(idx) => { len = 32; },
+            SignatureToken::StructInstantiation(idx, types) =>  { len = 32; },
+            SignatureToken::Reference(boxed) => { len = 32; }
+            SignatureToken::MutableReference(boxed) =>  { len = 32; },
+            SignatureToken::TypeParameter(idx) =>  { len = 32; },
+            _ => { len = 1 }, // TODO
+        }
+
+        let random_data: Vec<u8> = (0..len).map(|_| rng.gen()).collect();
+        Constant {
+            type_: ty,
+            data: random_data,
+        }
+    }
 }
 
 /// A `CodeUnit` is the body of a function. It has the function header and the instruction stream.
@@ -1772,6 +1911,83 @@ impl Bytecode {
     }
 }
 
+impl Distribution<Bytecode> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Bytecode {
+        const ENUM_SIZE: usize = Bytecode::VARIANT_COUNT;
+        match rng.gen_range(0..ENUM_SIZE) {
+            0 => Bytecode::Pop,
+            1 => Bytecode::Ret,
+            2 => Bytecode::BrTrue(rng.gen()),
+            3 => Bytecode::BrFalse(rng.gen()),
+            4 => Bytecode::Branch(rng.gen()),
+            5 => Bytecode::LdU8(rng.gen()),
+            6 => Bytecode::LdU64(rng.gen()),
+            7 => Bytecode::LdU128(rng.gen()),
+            8 => Bytecode::CastU8,
+            9 => Bytecode::CastU64,
+            10 => Bytecode::CastU128,
+            11 => Bytecode::LdConst(random()),
+            12 => Bytecode::LdTrue,
+            13 => Bytecode::LdFalse,
+            14 => Bytecode::CopyLoc(rng.gen()),
+            15 => Bytecode::MoveLoc(rng.gen()),
+            16 => Bytecode::StLoc(rng.gen()),
+            17 => Bytecode::Call(random()),
+            18 => Bytecode::CallGeneric(random()),
+            19 => Bytecode::Pack(random()),
+            20 => Bytecode::PackGeneric(random()),
+            21 => Bytecode::Unpack(random()),
+            22 => Bytecode::UnpackGeneric(random()),
+            23 => Bytecode::ReadRef,
+            24 => Bytecode::WriteRef,
+            25 => Bytecode::FreezeRef,
+            26 => Bytecode::MutBorrowLoc(rng.gen()),
+            27 => Bytecode::ImmBorrowLoc(rng.gen()),
+            28 => Bytecode::MutBorrowField(random()),
+            29 => Bytecode::MutBorrowFieldGeneric(random()),
+            30 => Bytecode::ImmBorrowField(random()),
+            31 => Bytecode::ImmBorrowFieldGeneric(random()),
+            32 => Bytecode::Add,
+            33 => Bytecode::Sub,
+            34 => Bytecode::Mul,
+            35 => Bytecode::Mod,
+            36 => Bytecode::Div,
+            37 => Bytecode::BitOr,
+            38 => Bytecode::BitAnd,
+            39 => Bytecode::Xor,
+            40 => Bytecode::Or,
+            41 => Bytecode::And,
+            42 => Bytecode::Not,
+            43 => Bytecode::Eq,
+            44 => Bytecode::Neq,
+            45 => Bytecode::Lt,
+            46 => Bytecode::Gt,
+            47 => Bytecode::Le,
+            48 => Bytecode::Ge,
+            49 => Bytecode::Abort,
+            50 => Bytecode::Nop,
+            51 => Bytecode::Shl,
+            52 => Bytecode::Shr,
+            53 => Bytecode::VecPack(random(), rng.gen()),
+            54 => Bytecode::VecLen(random()),
+            55 => Bytecode::VecImmBorrow(random()),
+            56 => Bytecode::VecMutBorrow(random()),
+            57 => Bytecode::VecPushBack(random()),
+            58 => Bytecode::VecPopBack(random()),
+            59 => Bytecode::VecUnpack(random(), rng.gen()),
+            60 => Bytecode::VecSwap(random()),
+            61 => Bytecode::LdU16(rng.gen()),
+            62 => Bytecode::LdU32(rng.gen()),
+            // 63 => Bytecode::LdU256(move_core_types::u256::U256::from(rng.gen::<u64>())),
+            63 => Bytecode::LdU256(random()),
+            64 => Bytecode::CastU16,
+            65 => Bytecode::CastU32,
+            66 => Bytecode::CastU256,
+            _ => unreachable!(),
+        }
+    }
+}
+
 /// Contains the main function to execute and its dependencies.
 ///
 /// A CompiledScript does not have definition tables because it can only have a `main(args)`.
@@ -2025,6 +2241,78 @@ impl CompiledModule {
     /// Returns the code key of `self`
     pub fn self_id(&self) -> ModuleId {
         self.module_id_for_handle(self.self_handle())
+    }
+
+    pub fn print_value_of_field(&self, field: CompiledModuleField) {
+        match field {
+            CompiledModuleField::Version => println!("version: {:?}", self.version),
+            CompiledModuleField::SelfModuleHandleIdx => println!("self_module_handle_idx: {:?}", self.self_module_handle_idx),
+            CompiledModuleField::ModuleHandles => println!("module_handles: {:?}", self.module_handles),
+            CompiledModuleField::StructHandles => println!("struct_handles: {:?}", self.struct_handles),
+            CompiledModuleField::FunctionHandles => println!("function_handles: {:?}", self.function_handles),
+            CompiledModuleField::FieldHandles => println!("field_handles: {:?}", self.field_handles),
+            CompiledModuleField::FriendDecls => println!("friend_decls: {:?}", self.friend_decls),
+            CompiledModuleField::StructDefInstantiations => println!("struct_def_instantiations: {:?}", self.struct_def_instantiations),
+            CompiledModuleField::FunctionInstantiations => println!("function_instantiations: {:?}", self.function_instantiations),
+            CompiledModuleField::FieldInstantiations => println!("field_instantiations: {:?}", self.field_instantiations),
+            CompiledModuleField::Signatures => println!("signatures: {:?}", self.signatures),
+            CompiledModuleField::Identifiers => println!("identifiers: {:?}", self.identifiers),
+            CompiledModuleField::AddressIdentifiers => println!("address_identifiers: {:?}", self.address_identifiers),
+            CompiledModuleField::ConstantPool => println!("constant_pool: {:?}", self.constant_pool),
+            CompiledModuleField::Metadata => println!("metadata: {:?}", self.metadata),
+            CompiledModuleField::StructDefs => println!("struct_defs: {:?}", self.struct_defs),
+            CompiledModuleField::FunctionDefs => println!("function_defs: {:?}", self.function_defs),
+            _ => println!("Field not found"),
+        }
+    }
+}
+
+
+#[derive(Debug, VariantCount, Clone, Copy)]
+pub enum CompiledModuleField {
+    Version,
+    SelfModuleHandleIdx,
+    ModuleHandles,
+    StructHandles,
+    FunctionHandles,
+    FieldHandles,
+    FriendDecls,
+    StructDefInstantiations,
+    FunctionInstantiations,
+    FieldInstantiations,
+    Signatures,
+    Identifiers,
+    AddressIdentifiers,
+    ConstantPool,
+    Metadata,
+    StructDefs,
+    FunctionDefs,
+}
+
+impl Distribution<CompiledModuleField> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> CompiledModuleField {
+        const ENUM_SIZE: usize = CompiledModuleField::VARIANT_COUNT;
+        // println!("enum size {:?}", ENUM_SIZE);
+        match rng.gen_range(0..ENUM_SIZE) {
+            0 => CompiledModuleField::Version,
+            1 => CompiledModuleField::SelfModuleHandleIdx,
+            2 => CompiledModuleField::ModuleHandles,
+            3 => CompiledModuleField::StructHandles,
+            4 => CompiledModuleField::FunctionHandles,
+            5 => CompiledModuleField::FieldHandles,
+            6 => CompiledModuleField::FriendDecls,
+            7 => CompiledModuleField::StructDefInstantiations,
+            8 => CompiledModuleField::FunctionInstantiations,
+            9 => CompiledModuleField::FieldInstantiations,
+            10 => CompiledModuleField::Signatures,
+            11 => CompiledModuleField::Identifiers,
+            12 => CompiledModuleField::AddressIdentifiers,
+            13 => CompiledModuleField::ConstantPool,
+            14 => CompiledModuleField::Metadata,
+            15 => CompiledModuleField::StructDefs,
+            16 => CompiledModuleField::FunctionDefs,
+            _ => unreachable!(),
+        }
     }
 }
 

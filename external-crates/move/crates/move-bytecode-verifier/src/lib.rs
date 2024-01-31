@@ -47,3 +47,5 @@ mod reference_safety;
 mod regression_tests;
 mod stack_usage_verifier;
 mod type_safety;
+
+pub mod mutate;
