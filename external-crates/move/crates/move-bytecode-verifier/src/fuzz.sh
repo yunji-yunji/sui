@@ -27,6 +27,11 @@ while test $# -gt 0; do
             mutate::test_mutate_and_verify_module -- \
             --exact --nocapture
             ;;
+        -mymiri)
+            cargo +fuzz miri test \
+            mutate::test_mutate_and_verify_module -- \
+            --exact --nocapture
+            ;;
         *)
             echo "invalid argument $1"
             exit 1

@@ -340,7 +340,7 @@ pub fn mutate(module: &CompiledModule) -> CompiledModule {
 fn test_mutate_and_verify_module() {
     let mut module: CompiledModule = empty_module();
 
-    const NUM_OF_ITER: usize = 3;
+    const NUM_OF_ITER: usize = 10;
 
     for _ in 0..NUM_OF_ITER {
         module = mutate(&module);
